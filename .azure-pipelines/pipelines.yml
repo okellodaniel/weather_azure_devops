@@ -1,0 +1,150 @@
+﻿# azure-pipelines.yml
+trigger:
+  branches:
+    include:
+      - main
+  paths:
+    exclude:
+      - '**/*.md'
+
+variables:
+  - group: common-variables # Contains shared variables
+  - name: containerRegistry
+    value: 'assessment.azurecr.io'
+  - name: helmChartPath
+    value: 'helm/weather-api'
+
+stages:
+  - stage: Build
+    displayName: 'Build and Test'
+    jobs:
+      - job: BuildTest
+        displayName: 'Build, Test and Security Scan'
+        pool:
+          vmImage: 'ubuntu-latest'
+        steps:
+          # Restore and Build
+          - task: DotNetCoreCLI@2
+            displayName: 'Restore NuGet packages'
+            inputs:
+              command: 'restore'
+              projects: '**/*.csproj'
+              feedsToUse: 'select'
+
+          - task: DotNetCoreCLI@2
+            displayName: 'Build solution'
+            inputs:
+              command: 'build'
+              projects: '**/*.csproj'
+              arguments: '--configuration Release --no-restore'
+          
+          # Run Unit Tests with Coverage
+          - task: DotNetCoreCLI@2
+            displayName: 'Run unit tests'
+            inputs:
+              command: 'test'
+              projects: '**/*Tests/*.csproj'
+              arguments: '--configuration Release --no-build --collect:"XPlat Code Coverage" --logger trx'
+              publishTestResults: true
+          
+          # SonarCloud Analysis
+          - task: SonarCloudPrepare@1
+            displayName: 'Prepare SonarCloud analysis'
+            inputs:
+              SonarCloud: 'SonarCloud'
+              organization: 'interswitch'
+              scannerMode: 'MSBuild'
+              projectKey: 'weather-api'
+              projectName: 'Weather API'
+          
+          # Security Scan
+          - task: WhiteSource@21
+            displayName: 'Run WhiteSource security scan'
+            inputs:
+              cwd: '$(System.DefaultWorkingDirectory)'
+          
+          # Build and Push Docker Image
+          - task: Docker@2
+            displayName: 'Build and push Docker image'
+            inputs:
+              containerRegistry: '$(containerRegistry)'
+              repository: 'weather-api'
+              command: 'buildAndPush'
+              Dockerfile: '**/Dockerfile'
+              buildContext: '$(Build.SourcesDirectory)'
+              tags: |
+                $(Build.BuildId)
+                latest
+          
+          # Package Helm Chart
+          - task: HelmInstaller@0
+            inputs:
+              helmVersion: '3.12.3'
+
+          - task: HelmDeploy@0
+            displayName: 'Package Helm chart'
+            inputs:
+              command: 'package'
+              chartPath: '$(helmChartPath)'
+              destination: '$(Build.ArtifactStagingDirectory)'
+          
+          # Publish Artifacts
+          - task: PublishBuildArtifacts@1
+            inputs:
+              PathtoPublish: '$(Build.ArtifactStagingDirectory)'
+              ArtifactName: 'helm-charts'
+              publishLocation: 'Container'
+
+  - stage: DeployToDev
+    displayName: 'Deploy to Development'
+    dependsOn: Build
+    condition: succeeded()
+    variables:
+      - group: development-variables
+    jobs:
+      - deployment: Deploy
+        environment: development
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - template: templates/deploy-to-aks.yml
+                  parameters:
+                    environment: 'development'
+                    imageTag: $(Build.BuildId)
+
+  - stage: DeployToStaging
+    displayName: 'Deploy to Staging'
+    dependsOn: DeployToDev
+    condition: succeeded()
+    variables:
+      - group: staging-variables
+    jobs:
+      - deployment: Deploy
+        environment: staging  # Requires manual approval in Azure DevOps
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - template: templates/deploy-to-aks.yml
+                  parameters:
+                    environment: 'staging'
+                    imageTag: $(Build.BuildId)
+
+  - stage: DeployToProd
+    displayName: 'Deploy to Production'
+    dependsOn: DeployToStaging
+    condition: succeeded()
+    variables:
+      - group: production-variables
+    jobs:
+      - deployment: Deploy
+        environment: production  # Requires two approvals in Azure DevOps
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - template: templates/deploy-to-aks.yml
+                  parameters:
+                    environment: 'production'
+                    imageTag: $(Build.BuildId)

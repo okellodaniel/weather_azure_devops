@@ -1,0 +1,62 @@
+﻿# templates/deploy-to-aks.yml
+parameters:
+  - name: environment
+    type: string
+  - name: imageTag
+    type: string
+
+steps:
+  - task: HelmInstaller@0
+    inputs:
+      helmVersion: '3.12.3'
+  
+  # Download Secrets from Key Vault
+  - task: AzureKeyVault@2
+    inputs:
+      azureSubscription: 'Azure-ServiceConnection'
+      KeyVaultName: 'interswitch-keyvault-${{ parameters.environment }}'
+      SecretsFilter: '*'
+      RunAsPreJob: true
+  
+  # Get previous release for potential rollback
+  - task: Bash@3
+    name: GetPreviousRelease
+    inputs:
+      targetType: 'inline'
+      script: |
+        PREV_REVISION=$(helm history weather-api -n ${{ parameters.environment }} -o json | jq -r '.[] | select(.status=="deployed") | .revision' | sort -n | tail -n 1)
+        echo "##vso[task.setvariable variable=PreviousRevision]$PREV_REVISION"
+  
+  # Deploy using Helm
+  - task: HelmDeploy@0
+    name: HelmDeploy
+    inputs:
+      connectionType: 'Azure Resource Manager'
+      azureSubscription: 'Azure-ServiceConnection'
+      azureResourceGroup: 'aks-resource-group'
+      kubernetesCluster: 'interswitch-aks'
+      namespace: ${{ parameters.environment }}
+      command: 'upgrade'
+      chartType: 'FilePath'
+      chartPath: '$(Pipeline.Workspace)/helm-charts/weather-api-*.tgz'
+      releaseName: 'weather-api'
+      valueFile: 'helm/weather-api/values-${{ parameters.environment }}.yaml'
+      arguments: >
+        --set image.tag=${{ parameters.imageTag }}
+        --set secrets.appInsightsKey=$(ApplicationInsights--ConnectionString)
+        --atomic 
+        --timeout 10m
+        --cleanup-on-fail
+  
+  # Rollback in case of failure
+  - task: HelmDeploy@0
+    condition: failed()
+    inputs:
+      connectionType: 'Azure Resource Manager'
+      azureSubscription: 'Azure-ServiceConnection'
+      azureResourceGroup: 'aks-resource-group'
+      kubernetesCluster: 'interswitch-aks'
+      namespace: ${{ parameters.environment }}
+      command: 'rollback'
+      releaseName: 'weather-api'
+      arguments: '$(PreviousRevision)'
