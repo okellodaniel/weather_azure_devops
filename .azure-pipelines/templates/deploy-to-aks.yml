@@ -13,8 +13,8 @@ steps:
   # Download Secrets from Key Vault
   - task: AzureKeyVault@2
     inputs:
-      azureSubscription: 'Azure-ServiceConnection'
-      KeyVaultName: 'interswitch-keyvault-${{ parameters.environment }}'
+      azureSubscription: 'assessment-acr-connection'
+      KeyVaultName: 'assessment-keyvault-${{ parameters.environment }}'
       SecretsFilter: '*'
       RunAsPreJob: true
   
@@ -32,9 +32,9 @@ steps:
     name: HelmDeploy
     inputs:
       connectionType: 'Azure Resource Manager'
-      azureSubscription: 'Azure-ServiceConnection'
-      azureResourceGroup: 'aks-resource-group'
-      kubernetesCluster: 'interswitch-aks'
+      azureSubscription: 'assessment-acr-connection'
+      azureResourceGroup: 'machine_group'
+      kubernetesCluster: 'assessment'
       namespace: ${{ parameters.environment }}
       command: 'upgrade'
       chartType: 'FilePath'
