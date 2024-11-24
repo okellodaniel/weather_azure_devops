@@ -46,17 +46,25 @@ stages:
               projects: '**/*Tests/*.csproj'
               arguments: '--configuration Release --no-build --collect:"XPlat Code Coverage" --logger trx'
               publishTestResults: true
-          
-          # SonarCloud Analysis
-          - task: SonarCloudPrepare@1
-            displayName: 'Prepare SonarCloud analysis'
+                # OWASP Dependency Check
+          - task: dependency-check-build-task@6
+            displayName: 'OWASP Dependency Check'
             inputs:
-              SonarCloud: 'SonarCloud'
-              organization: 'interswitch'
-              scannerMode: 'MSBuild'
-              projectKey: 'weather-api'
-              projectName: 'Weather API'
-                  
+              projectName: 'WeatherApi'
+              scanPath: '$(Build.SourcesDirectory)'
+              format: 'HTML,CSV,JSON'
+              failOnCVSS: '7'
+          # Trivy Scanner for Container Security
+          - script: |
+              sudo apt-get install -y wget apt-transport-https gnupg lsb-release
+              wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+              echo deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main | sudo tee -a /etc/apt/sources.list.d/trivy.list
+              sudo apt-get update
+              sudo apt-get install -y trivy
+              trivy fs --security-checks vuln,config,secret .
+              trivy config .
+            displayName: 'Trivy Security Scan'
+                      
           # Build and Push Docker Image
           - task: Docker@2
             displayName: 'Build and push Docker image'
