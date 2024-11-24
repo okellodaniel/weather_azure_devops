@@ -1,0 +1,6 @@
+﻿environment: Staging
+replicaCount: 3
+ingress:
+  enabled: true
+  hosts:
+    - host: api-staging.assessment.com

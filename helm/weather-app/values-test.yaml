@@ -1,0 +1,6 @@
+﻿environment: Development
+replicaCount: 1
+ingress:
+  enabled: true
+  hosts:
+    - host: dev-api.assessment.com

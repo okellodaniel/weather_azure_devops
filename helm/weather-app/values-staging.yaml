@@ -1,0 +1,6 @@
+﻿environment: Production
+replicaCount: 2
+ingress:
+  enabled: true
+  hosts:
+    - host: api.assessment.com
