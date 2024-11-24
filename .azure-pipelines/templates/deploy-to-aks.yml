@@ -53,9 +53,9 @@ steps:
     condition: failed()
     inputs:
       connectionType: 'Azure Resource Manager'
-      azureSubscription: 'Azure-ServiceConnection'
-      azureResourceGroup: 'aks-resource-group'
-      kubernetesCluster: 'interswitch-aks'
+      azureSubscription: 'assessment-acr-connection'
+      azureResourceGroup: 'machine_group'
+      kubernetesCluster: 'assessment'
       namespace: ${{ parameters.environment }}
       command: 'rollback'
       releaseName: 'weather-api'

@@ -138,7 +138,7 @@ stages:
           - task: Docker@2
             displayName: 'Build and push Docker image'
             inputs:
-              containerRegistry: '$(containerRegistry)'
+              containerRegistry: 'assessment-acr-connection'
               repository: 'weather-api'
               command: 'buildAndPush'
               Dockerfile: '**/Dockerfile'
