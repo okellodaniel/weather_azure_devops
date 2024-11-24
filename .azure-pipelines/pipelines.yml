@@ -8,11 +8,14 @@ trigger:
       - '**/*.md'
 
 variables:
-  - group: common-variables # Contains shared variables
+  # Define shared variables
+  - group: common-variables 
   - name: containerRegistry
     value: 'assessment.azurecr.io'
   - name: helmChartPath
     value: 'helm/weather-api'
+  - name: DEPENDENCY_CHECK_VERSION 
+    value: '7.4.4'
 
 stages:
   - stage: Build
@@ -46,15 +49,59 @@ stages:
               projects: '**/*Tests/*.csproj'
               arguments: '--configuration Release --no-build --collect:"XPlat Code Coverage" --logger trx'
               publishTestResults: true
-                # OWASP Dependency Check
-          - task: dependency-check-build-task@6
-            displayName: 'OWASP Dependency Check'
+            
+            # Security Scan
+          - script: |
+              # Create directory for OWASP Dependency Check
+              mkdir -p $(Agent.TempDirectory)/dependency-check
+              
+              # Download OWASP Dependency Check
+              wget "https://github.com/jeremylong/DependencyCheck/releases/download/v$(DEPENDENCY_CHECK_VERSION)/dependency-check-$(DEPENDENCY_CHECK_VERSION)-release.zip" -O $(Agent.TempDirectory)/dependency-check.zip
+              
+              # Extract the tool
+              unzip -q $(Agent.TempDirectory)/dependency-check.zip -d $(Agent.TempDirectory)/dependency-check
+              
+              # Run Dependency Check
+              $(Agent.TempDirectory)/dependency-check/dependency-check/bin/dependency-check.sh \
+                --project "Weather API" \
+                --scan "$(Build.SourcesDirectory)" \
+                --format "HTML" \
+                --format "JSON" \
+                --format "XML" \
+                --failOnCVSS 7 \
+                --enableExperimental \
+                --out "$(Build.ArtifactStagingDirectory)/dependency-check"
+              displayName: 'OWASP Dependency Check'
+              continueOnError: false
+
+            # Publish Dependency Check Results
+          - task: PublishBuildArtifacts@1
             inputs:
-              projectName: 'WeatherApi'
-              scanPath: '$(Build.SourcesDirectory)'
-              format: 'HTML,CSV,JSON'
-              failOnCVSS: '7'
-          # Trivy Scanner for Container Security
+              pathToPublish: '$(Build.ArtifactStagingDirectory)/dependency-check'
+              artifactName: 'DependencyCheck'
+              publishLocation: 'Container'
+
+          # Parse results and fail if needed
+          - task: PowerShell@2
+            inputs:
+              targetType: 'inline'
+              script: |
+                $xmlReport = "$(Build.ArtifactStagingDirectory)/dependency-check/dependency-check-report.xml"
+              
+                if (Test-Path $xmlReport) {
+                  [xml]$report = Get-Content $xmlReport
+              
+                  $highVulnerabilities = $report.analysis.dependencies.dependency.vulnerabilities.vulnerability | 
+                    Where-Object { [float]$_.cvssScore -ge 7.0 }
+              
+                  if ($highVulnerabilities) {
+                    Write-Host "##vso[task.LogIssue type=error]Found $($highVulnerabilities.Count) high severity vulnerabilities"
+                    Write-Host "##vso[task.complete result=Failed;]"
+                  }
+                }
+            displayName: 'Analyze Dependency Check Results'
+
+            # Trivy Scanner remains the same...
           - script: |
               sudo apt-get install -y wget apt-transport-https gnupg lsb-release
               wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
@@ -64,7 +111,43 @@ stages:
               trivy fs --security-checks vuln,config,secret .
               trivy config .
             displayName: 'Trivy Security Scan'
-                      
+
+              # Optional: Create consolidated security report
+          - task: PowerShell@2
+            inputs:
+            targetType: 'inline'
+            script: |
+              $reportDir = "$(Build.ArtifactStagingDirectory)/security-report"
+              New-Item -ItemType Directory -Force -Path $reportDir
+            
+              # Combine all security reports
+              Copy-Item "$(Build.ArtifactStagingDirectory)/dependency-check/*" -Destination $reportDir -Recurse
+              Copy-Item "$(Build.SourcesDirectory)/trivy-results.json" -Destination $reportDir -ErrorAction SilentlyContinue
+            
+              # Create summary
+              $summary = @"
+              Security Scan Summary
+              ---------------------
+              Date: $(Get-Date)
+              Build: $(Build.BuildNumber)
+            
+              Included Scans:
+              - OWASP Dependency Check
+              - Trivy Security Scan
+            
+              See detailed reports in the artifacts.
+              "@
+            
+              $summary | Out-File "$reportDir/summary.txt"
+            displayName: 'Create Security Report'
+
+              # Publish consolidated security report
+          - task: PublishBuildArtifacts@1
+            inputs:
+            pathToPublish: '$(Build.ArtifactStagingDirectory)/security-report'
+            artifactName: 'SecurityReports'
+            publishLocation: 'Container'
+
           # Build and Push Docker Image
           - task: Docker@2
             displayName: 'Build and push Docker image'
